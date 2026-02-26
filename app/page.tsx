@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
 
@@ -33,6 +35,15 @@ export default function HomePage() {
     })
   }
 
+  const removeFromCart = (itemId: string) => {
+    setCart(cart => {
+      const existing = cart.find(c => c.item.id === itemId)
+      if (!existing) return cart
+      if (existing.qty === 1) return cart.filter(c => c.item.id !== itemId)
+      return cart.map(c => c.item.id === itemId ? {...c, qty: c.qty - 1} : c)
+    })
+  }
+
   const total = cart.reduce((sum, c) => sum + c.item.price * c.qty, 0)
 
   const grouped = menu.reduce((acc, item) => {
@@ -47,14 +58,25 @@ export default function HomePage() {
         <p style={{ color: 'var(--muted)' }}>Menú digital</p>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '2rem' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr',
+        gap: '2rem',
+        '@media (min-width: 768px)': {
+          gridTemplateColumns: '1fr 320px'
+        }
+      } as React.CSSProperties}>
         <div>
           {Object.entries(grouped).map(([cat, items]) => (
             <section key={cat} style={{ marginBottom: '2rem' }}>
               <h2 style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
                 {cat}
               </h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                gap: '1rem'
+              }}>
                 {items.map(item => (
                   <div key={item.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     {item.image_url && (
@@ -76,16 +98,36 @@ export default function HomePage() {
         </div>
 
         <aside>
-          <div className="card" style={{ position: 'sticky', top: '1rem' }}>
+          <div className="card" style={{
+            position: 'static',
+            '@media (min-width: 768px)': {
+              position: 'sticky',
+              top: '1rem'
+            }
+          } as React.CSSProperties}>
             <h3 style={{ marginBottom: '1rem' }}>Carrito</h3>
             {cart.length === 0 ? (
               <p style={{ color: 'var(--muted)' }}>Tu pedido está vacío</p>
             ) : (
               <>
                 {cart.map(({item, qty}) => (
-                  <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <div key={item.id} style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '0.5rem'
+                  }}>
                     <span>{item.name} × {qty}</span>
-                    <span>${(item.price * qty).toFixed(0)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span>${(item.price * qty).toFixed(0)}</span>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                        onClick={() => removeFromCart(item.id)}
+                      >
+                        −
+                      </button>
+                    </div>
                   </div>
                 ))}
                 <hr style={{ border: 0, borderTop: '1px solid var(--border)', margin: '1rem 0' }} />
