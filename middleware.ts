@@ -2,7 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
 export async function middleware(request: Request) {
-  const { data: { session } } = await createClient().auth.getSession()
+  const supabase = await createClient()
+  const { data: { session } } = await supabase.auth.getSession()
 
   // Rutas públicas (login, menú) no requieren auth
   const publicPaths = ['/login', '/']
