@@ -16,8 +16,27 @@ export default function MeseroPage() {
   const router = useRouter()
   const [orders, setOrders] = useState<Order[]>([])
   const [table, setTable] = useState('')
+  const [authorized, setAuthorized] = useState(false)
 
   useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.replace('/login')
+        return
+      }
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+      if (profile?.role !== 'mesero') {
+        router.replace('/login')
+      } else {
+        setAuthorized(true)
+      }
+    }
+    checkAuth()
+  }, [router])
+
+  useEffect(() => {
+    if (!authorized) return
     const fetchOrders = async () => {
       const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: true })
       setOrders(data || [])
@@ -25,7 +44,7 @@ export default function MeseroPage() {
     fetchOrders()
     const channel = supabase.channel('orders-mesero').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOrders).subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, [authorized])
 
   const createOrder = async () => {
     const tableNum = Number(table)

@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 type Order = {
   id: string
@@ -13,10 +14,30 @@ type Order = {
 
 export default function CajaPage() {
   const supabase = createClient()
+  const router = useRouter()
   const [orders, setOrders] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
+  const [authorized, setAuthorized] = useState(false)
 
   useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.replace('/login')
+        return
+      }
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+      if (profile?.role !== 'caja') {
+        router.replace('/login')
+      } else {
+        setAuthorized(true)
+      }
+    }
+    checkAuth()
+  }, [router])
+
+  useEffect(() => {
+    if (!authorized) return
     const fetchOrders = async () => {
       const { data } = await supabase.from('orders').select('*')
       setOrders(data || [])
@@ -24,13 +45,14 @@ export default function CajaPage() {
     fetchOrders()
     const channel = supabase.channel('orders-caja').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOrders).subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, [authorized])
 
   useEffect(() => {
+    if (!authorized) return
     const delivered = orders.filter(o => o.status === 'delivered')
     const sum = delivered.reduce((acc, o) => acc + o.items.reduce((a, i) => a + i.price * i.qty, 0), 0)
     setTotal(sum)
-  }, [orders])
+  }, [orders, authorized])
 
   return (
     <div className="container" style={{ paddingTop: '2rem' }}>

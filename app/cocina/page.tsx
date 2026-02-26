@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 type Order = {
   id: string
@@ -13,9 +14,29 @@ type Order = {
 
 export default function CocinaPage() {
   const supabase = createClient()
+  const router = useRouter()
   const [orders, setOrders] = useState<Order[]>([])
+  const [authorized, setAuthorized] = useState(false)
 
   useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.replace('/login')
+        return
+      }
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+      if (profile?.role !== 'cocina') {
+        router.replace('/login')
+      } else {
+        setAuthorized(true)
+      }
+    }
+    checkAuth()
+  }, [router])
+
+  useEffect(() => {
+    if (!authorized) return
     const fetchOrders = async () => {
       const { data } = await supabase.from('orders').select('*').order('created_at', { ascending: true })
       setOrders(data || [])
@@ -29,7 +50,7 @@ export default function CocinaPage() {
     ).subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, [authorized])
 
   const updateStatus = async (orderId: string, status: Order['status']) => {
     await supabase.from('orders').update({ status }).eq('id', orderId)

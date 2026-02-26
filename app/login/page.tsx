@@ -18,8 +18,21 @@ export default function LoginPage() {
     setError(null)
 
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError(error.message)
-    else router.push('/mesero')
+    if (error) {
+      setError(error.message)
+      setLoading(false)
+      return
+    }
+
+    // Obtener perfil para conocer el rol
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+      const role = profile?.role || 'mesero'
+      router.push(`/${role}`)
+    } else {
+      router.push('/mesero')
+    }
     setLoading(false)
   }
 
