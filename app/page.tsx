@@ -18,24 +18,6 @@ export default function HomePage() {
   const router = useRouter()
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<{item: MenuItem; qty: number}[]>([])
-  const [tableNumber, setTableNumber] = useState('')
-  const [sending, setSending] = useState(false)
-  const [message, setMessage] = useState<{type: 'success' | 'error'; text: string} | null>(null)
-
-  // Cargar carrito guardado al iniciar
-  useEffect(() => {
-    const saved = localStorage.getItem('cart')
-    if (saved) {
-      try {
-        setCart(JSON.parse(saved))
-      } catch {}
-    }
-  }, [])
-
-  // Guardar carrito en localStorage cada vez que cambie
-  useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(cart))
-  }, [cart])
 
   useEffect(() => {
     const fetchMenu = async () => {
@@ -64,45 +46,6 @@ export default function HomePage() {
 
   const total = cart.reduce((sum, c) => sum + c.item.price * c.qty, 0)
 
-  const submitOrder = async () => {
-    const tableNum = Number(tableNumber)
-    if (!tableNum) {
-      setMessage({ type: 'error', text: 'Ingresa el número de mesa' })
-      return
-    }
-    if (cart.length === 0) {
-      setMessage({ type: 'error', text: 'El carrito está vacío' })
-      return
-    }
-
-    setSending(true)
-    setMessage(null)
-
-    try {
-      const items = cart.map(c => ({
-        name: c.item.name,
-        qty: c.qty,
-        price: c.item.price
-      }))
-      const { error } = await supabase.from('orders').insert({
-        table_number: tableNum,
-        items,
-        status: 'pending'
-      })
-      if (error) throw error
-
-      // Limpiar
-      localStorage.removeItem('cart')
-      setCart([])
-      setTableNumber('')
-      setMessage({ type: 'success', text: 'Pedido enviado. Cocina lo preparará.' })
-    } catch (err: any) {
-      setMessage({ type: 'error', text: 'Error: ' + (err.message || 'No se pudo enviar') })
-    } finally {
-      setSending(false)
-    }
-  }
-
   const grouped = menu.reduce((acc, item) => {
     (acc[item.category] ||= []).push(item)
     return acc
@@ -113,7 +56,7 @@ export default function HomePage() {
       <header style={{ textAlign: 'center', marginBottom: '2rem' }}>
         <h1>Restaurante Fluido</h1>
         <p style={{ color: 'var(--muted)' }}>Menú digital</p>
-        <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/login') }}>
+        <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/login')}>
           Iniciar sesión empleados
         </button>
       </header>
@@ -182,36 +125,8 @@ export default function HomePage() {
                   <span>Total</span>
                   <span>${total.toFixed(0)}</span>
                 </div>
-
-                <div style={{ marginTop: '1rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Número de mesa</label>
-                  <input
-                    type="number"
-                    placeholder="Ej: 5"
-                    value={tableNumber}
-                    onChange={e => setTableNumber(e.target.value)}
-                    className="card"
-                    style={{ width: '100%', padding: '0.5rem' }}
-                  />
-                </div>
-
-                {message && (
-                  <p style={{
-                    marginTop: '0.75rem',
-                    color: message.type === 'success' ? '#7aad7a' : '#ff6b6b',
-                    fontSize: '0.875rem'
-                  }}>
-                    {message.text}
-                  </p>
-                )}
-
-                <button
-                  className="btn btn-primary"
-                  style={{ width: '100%', marginTop: '1rem' }}
-                  onClick={submitOrder}
-                  disabled={sending}
-                >
-                  {sending ? 'Enviando...' : 'Enviar pedido'}
+                <button className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>
+                  Enviar pedido
                 </button>
               </>
             )}
