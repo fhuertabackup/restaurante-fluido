@@ -18,6 +18,22 @@ export default function HomePage() {
   const router = useRouter()
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<{item: MenuItem; qty: number}[]>([])
+  const [tableNumber, setTableNumber] = useState('')
+
+  // Cargar carrito guardado
+  useEffect(() => {
+    const saved = localStorage.getItem('cart')
+    if (saved) {
+      try {
+        setCart(JSON.parse(saved))
+      } catch {}
+    }
+  }, [])
+
+  // Guardar carrito en localStorage
+  useEffect(() => {
+    localStorage.setItem('cart', JSON.stringify(cart))
+  }, [cart])
 
   useEffect(() => {
     const fetchMenu = async () => {
@@ -46,6 +62,39 @@ export default function HomePage() {
 
   const total = cart.reduce((sum, c) => sum + c.item.price * c.qty, 0)
 
+  const submitOrder = async () => {
+    const tableNum = Number(tableNumber)
+    if (!tableNum) {
+      alert('Ingresa el número de mesa')
+      return
+    }
+    if (cart.length === 0) {
+      alert('El carrito está vacío')
+      return
+    }
+
+    const items = cart.map(c => ({
+      name: c.item.name,
+      qty: c.qty,
+      price: c.item.price
+    }))
+
+    const { error } = await supabase.from('orders').insert({
+      table_number: tableNum,
+      items,
+      status: 'pending'
+    })
+
+    if (error) {
+      alert('Error: ' + error.message)
+    } else {
+      localStorage.removeItem('cart')
+      setCart([])
+      setTableNumber('')
+      alert('Pedido enviado. Cocina lo preparará.')
+    }
+  }
+
   const grouped = menu.reduce((acc, item) => {
     (acc[item.category] ||= []).push(item)
     return acc
@@ -56,7 +105,7 @@ export default function HomePage() {
       <header style={{ textAlign: 'center', marginBottom: '2rem' }}>
         <h1>Restaurante Fluido</h1>
         <p style={{ color: 'var(--muted)' }}>Menú digital</p>
-        <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/login')}>
+        <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/login') }}>
           Iniciar sesión empleados
         </button>
       </header>
@@ -125,7 +174,24 @@ export default function HomePage() {
                   <span>Total</span>
                   <span>${total.toFixed(0)}</span>
                 </div>
-                <button className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>
+
+                <div style={{ marginTop: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Número de mesa</label>
+                  <input
+                    type="number"
+                    placeholder="Ej: 5"
+                    value={tableNumber}
+                    onChange={e => setTableNumber(e.target.value)}
+                    className="card"
+                    style={{ width: '100%', padding: '0.5rem' }}
+                  />
+                </div>
+
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%', marginTop: '1rem' }}
+                  onClick={submitOrder}
+                >
                   Enviar pedido
                 </button>
               </>
