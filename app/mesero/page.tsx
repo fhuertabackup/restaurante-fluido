@@ -11,6 +11,7 @@ type Order = {
   table_number: number
   status: 'pending' | 'preparing' | 'ready' | 'delivered'
   items: { name: string; qty: number }[]
+  created_at: string
 }
 
 export default function MeseroPage() {
@@ -69,6 +70,14 @@ export default function MeseroPage() {
     alert('Pedido enviado')
   }
 
+  const transferOrder = async (orderId: string) => {
+    const input = document.getElementById(`transfer-${orderId}`) as HTMLInputElement
+    const newTable = Number(input?.value)
+    if (!newTable) return alert('Ingresa número de mesa')
+    await supabase.from('orders').update({ table_number: newTable }).eq('id', orderId)
+    setOrders(orders.map(o => o.id === orderId ? {...o, table_number: newTable} : o))
+  }
+
   return (
     <div className="container" style={{ paddingTop: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -81,8 +90,9 @@ export default function MeseroPage() {
           }}>Cerrar sesión</button>
         </div>
       </div>
+
       <div className="card" style={{ marginBottom: '2rem' }}>
-        <h3>Nuevo pedido</h3>
+        <h3>Nuevo pedido (para llevar a mesa)</h3>
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
           <input type="number" placeholder="Mesa" value={table} onChange={e => setTable(e.target.value)} className="card" style={{ padding: '0.5rem' }} />
           <button className="btn btn-primary" onClick={createOrder}>Crear pedido</button>
@@ -100,6 +110,23 @@ export default function MeseroPage() {
             <ul style={{ marginLeft: '1rem', marginTop: '0.5rem' }}>
               {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
             </ul>
+            {['pending', 'preparing', 'ready'].includes(order.status) && (
+              <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  type="number"
+                  placeholder="Nueva mesa"
+                  id={`transfer-${order.id}`}
+                  style={{ width: '80px', padding: '0.25rem' }}
+                />
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                  onClick={() => transferOrder(order.id)}
+                >
+                  Transferir
+                </button>
+              </div>
+            )}
             {order.status === 'ready' && (
               <button className="btn btn-secondary" style={{ marginTop: '0.5rem' }} onClick={async () => {
                 await supabase.from('orders').update({ status: 'delivered' }).eq('id', order.id)
