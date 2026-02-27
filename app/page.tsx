@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 
 type MenuItem = {
   id: string
@@ -15,7 +15,6 @@ type MenuItem = {
 
 export default function HomePage() {
   const supabase = createClient()
-  const router = useRouter()
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<{item: MenuItem; qty: number}[]>([])
   const [tableNumber, setTableNumber] = useState('')
@@ -105,9 +104,9 @@ export default function HomePage() {
       <header style={{ textAlign: 'center', marginBottom: '2rem' }}>
         <h1>Restaurante Fluido</h1>
         <p style={{ color: 'var(--muted)' }}>Menú digital</p>
-        <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/login') }}>
+        <Link href="/login" className="btn btn-secondary" style={{ marginTop: '1rem', display: 'inline-block' }}>
           Iniciar sesión empleados
-        </button>
+        </Link>
       </header>
 
       <div className="menu-grid">
