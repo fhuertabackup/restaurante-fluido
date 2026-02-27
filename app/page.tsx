@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 type MenuItem = {
   id: string
@@ -14,6 +15,7 @@ type MenuItem = {
 
 export default function HomePage() {
   const supabase = createClient()
+  const router = useRouter()
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<{item: MenuItem; qty: number}[]>([])
 
@@ -54,16 +56,12 @@ export default function HomePage() {
       <header style={{ textAlign: 'center', marginBottom: '2rem' }}>
         <h1>Restaurante Fluido</h1>
         <p style={{ color: 'var(--muted)' }}>Menú digital</p>
+        <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/login')}>
+          Iniciar sesión empleados
+        </button>
       </header>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr',
-        gap: '2rem',
-        '@media (min-width: 768px)': {
-          gridTemplateColumns: '1fr 320px'
-        }
-      } as React.CSSProperties}>
+      <div className="menu-grid">
         <div>
           {Object.entries(grouped).map(([cat, items]) => (
             <section key={cat} style={{ marginBottom: '2rem' }}>
@@ -96,13 +94,7 @@ export default function HomePage() {
         </div>
 
         <aside>
-          <div className="card" style={{
-            position: 'static',
-            '@media (min-width: 768px)': {
-              position: 'sticky',
-              top: '1rem'
-            }
-          } as React.CSSProperties}>
+          <div className="card cart-sticky">
             <h3 style={{ marginBottom: '1rem' }}>Carrito</h3>
             {cart.length === 0 ? (
               <p style={{ color: 'var(--muted)' }}>Tu pedido está vacío</p>

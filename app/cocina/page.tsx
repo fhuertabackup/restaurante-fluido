@@ -19,6 +19,7 @@ export default function CocinaPage() {
   const router = useRouter()
   const [orders, setOrders] = useState<Order[]>([])
   const [authorized, setAuthorized] = useState(false)
+  const [userEmail, setUserEmail] = useState<string>('')
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -27,6 +28,7 @@ export default function CocinaPage() {
         router.replace('/login')
         return
       }
+      setUserEmail(user.email || '')
       const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
       if (profile?.role !== 'cocina') {
         router.replace('/login')
@@ -61,7 +63,16 @@ export default function CocinaPage() {
 
   return (
     <div className="container" style={{ paddingTop: '2rem' }}>
-      <h1 style={{ marginBottom: '1rem' }}>Cocina</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h1 style={{ marginBottom: 0 }}>Cocina</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--muted)' }}>{userEmail}</span>
+          <button className="btn btn-secondary" onClick={async () => {
+            await supabase.auth.signOut()
+            router.push('/login')
+          }}>Cerrar sesión</button>
+        </div>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
         {orders.map(order => (
           <div key={order.id} className="card" data-status={order.status}>

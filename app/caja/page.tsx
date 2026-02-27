@@ -20,6 +20,7 @@ export default function CajaPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
   const [authorized, setAuthorized] = useState(false)
+  const [userEmail, setUserEmail] = useState<string>('')
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -28,6 +29,7 @@ export default function CajaPage() {
         router.replace('/login')
         return
       }
+      setUserEmail(user.email || '')
       const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
       if (profile?.role !== 'caja') {
         router.replace('/login')
@@ -58,7 +60,16 @@ export default function CajaPage() {
 
   return (
     <div className="container" style={{ paddingTop: '2rem' }}>
-      <h1>Caja</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h1>Caja</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--muted)' }}>{userEmail}</span>
+          <button className="btn btn-secondary" onClick={async () => {
+            await supabase.auth.signOut()
+            router.push('/login')
+          }}>Cerrar sesión</button>
+        </div>
+      </div>
       <div className="card" style={{ marginBottom: '2rem', textAlign: 'center' }}>
         <h2>Ventas del día</h2>
         <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--accent)' }}>${total.toFixed(0)}</p>
