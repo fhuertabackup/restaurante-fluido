@@ -18,6 +18,7 @@ export default function HomePage() {
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<{item: MenuItem; qty: number}[]>([])
   const [tableNumber, setTableNumber] = useState('')
+  const [deliveredOrder, setDeliveredOrder] = useState<any>(null)
 
   // Cargar carrito guardado
   useEffect(() => {
@@ -33,6 +34,26 @@ export default function HomePage() {
   useEffect(() => {
     localStorage.setItem('cart', JSON.stringify(cart))
   }, [cart])
+
+  // Buscar si hay pedido delivered para la mesa actual
+  useEffect(() => {
+    if (!tableNumber) {
+      setDeliveredOrder(null)
+      return
+    }
+    const fetchDelivered = async () => {
+      const { data } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('table_number', Number(tableNumber))
+        .eq('status', 'delivered')
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (data && data.length > 0) setDeliveredOrder(data[0])
+      else setDeliveredOrder(null)
+    }
+    fetchDelivered()
+  }, [tableNumber])
 
   useEffect(() => {
     const fetchMenu = async () => {
@@ -79,7 +100,7 @@ export default function HomePage() {
     }))
 
     try {
-      // Buscar pedido existente para esta mesa (que no esté delivered)
+      // Buscar pedido existente para esta mesa (que no esté delivered ni paid)
       const { data: existingOrders } = await supabase
         .from('orders')
         .select('*')
@@ -121,9 +142,24 @@ export default function HomePage() {
       localStorage.removeItem('cart')
       setCart([])
       setTableNumber('')
+      setDeliveredOrder(null)
       alert('Pedido enviado a cocina.')
     } catch (err: any) {
       alert('Error: ' + (err.message || 'No se pudo enviar'))
+    }
+  }
+
+  const requestPayment = async () => {
+    if (!deliveredOrder) return
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: 'payment_requested' })
+      .eq('id', deliveredOrder.id)
+    if (error) {
+      alert('Error: ' + error.message)
+    } else {
+      setDeliveredOrder(null)
+      alert('Cuenta solicitada. El personal de caja le notificará.')
     }
   }
 
@@ -215,17 +251,32 @@ export default function HomePage() {
                     value={tableNumber}
                     onChange={e => setTableNumber(e.target.value)}
                     className="card"
-                    style={{ width: '100%', padding: '0.5rem', color: 'var(--text)' }}
+                    style={{ width: '100%', padding: '0.5rem' }}
                   />
                 </div>
 
-                <button
-                  className="btn btn-primary"
-                  style={{ width: '100%', marginTop: '1rem' }}
-                  onClick={submitOrder}
-                >
-                  Enviar pedido
-                </button>
+                {deliveredOrder && (
+                  <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(200,169,110,0.1)', borderRadius: '8px' }}>
+                    <p style={{ marginBottom: '0.5rem' }}>Su pedido ha sido entregado.</p>
+                    <button
+                      className="btn btn-primary"
+                      style={{ width: '100%' }}
+                      onClick={requestPayment}
+                    >
+                      Pedir cuenta
+                    </button>
+                  </div>
+                )}
+
+                {!deliveredOrder && (
+                  <button
+                    className="btn btn-primary"
+                    style={{ width: '100%', marginTop: '1rem' }}
+                    onClick={submitOrder}
+                  >
+                    Enviar pedido
+                  </button>
+                )}
               </>
             )}
           </div>

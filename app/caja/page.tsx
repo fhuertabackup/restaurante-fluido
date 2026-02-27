@@ -1,7 +1,5 @@
 'use client'
 
-export const dynamic = 'force-dynamic'
-
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -40,23 +38,37 @@ export default function CajaPage() {
     checkAuth()
   }, [router])
 
+  // Cargar todos los pedidos
+  const fetchOrders = async () => {
+    const { data } = await supabase.from('orders').select('*')
+    setOrders(data || [])
+  }
+
   useEffect(() => {
     if (!authorized) return
-    const fetchOrders = async () => {
-      const { data } = await supabase.from('orders').select('*')
-      setOrders(data || [])
-    }
     fetchOrders()
     const channel = supabase.channel('orders-caja').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOrders).subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [authorized])
 
+  const markAsPaid = async (orderId: string) => {
+    await supabase.from('orders').update({ status: 'paid' }).eq('id', orderId)
+    fetchOrders()
+  }
+
   useEffect(() => {
     if (!authorized) return
+    // Sumar solo delivered (ventas realizadas)
     const delivered = orders.filter(o => o.status === 'delivered')
     const sum = delivered.reduce((acc, o) => acc + o.items.reduce((a, i) => a + i.price * i.qty, 0), 0)
     setTotal(sum)
   }, [orders, authorized])
+
+  if (!authorized) return null
+
+  // Separar pedidos
+  const pendingPayments = orders.filter(o => ['payment_requested', 'delivered'].includes(o.status))
+  const paymentHistory = orders.filter(o => o.status === 'paid').sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
   return (
     <div className="container" style={{ paddingTop: '2rem' }}>
@@ -70,28 +82,67 @@ export default function CajaPage() {
           }}>Cerrar sesión</button>
         </div>
       </div>
+
       <div className="card" style={{ marginBottom: '2rem', textAlign: 'center' }}>
         <h2>Ventas del día</h2>
         <p style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--accent)' }}>${total.toFixed(0)}</p>
       </div>
 
-      <h2>Todas las mesas</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
-        {orders.map(order => (
-          <div key={order.id} className="card">
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <strong>Mesa {order.table_number}</strong>
-              <span style={{ textTransform: 'capitalize' }}>{order.status}</span>
+      {/* Sección: Pendientes de pago */}
+      <h2 style={{ marginBottom: '1rem' }}>Cuentas pendientes</h2>
+      {pendingPayments.length === 0 ? (
+        <p style={{ color: 'var(--muted)' }}>No hay cuentas pendientes.</p>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem', marginBottom: '3rem' }}>
+          {pendingPayments.map(order => (
+            <div key={order.id} className="card" style={{ borderColor: order.status === 'payment_requested' ? 'var(--accent)' : undefined }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <strong>Mesa {order.table_number}</strong>
+                <span style={{ textTransform: 'capitalize', color: order.status === 'payment_requested' ? 'var(--accent)' : 'var(--muted)' }}>
+                  {order.status === 'payment_requested' ? 'Esperando pago' : 'Listo para pagar'}
+                </span>
+              </div>
+              <ul style={{ marginLeft: '1rem', marginTop: '0.5rem', color: 'var(--muted)' }}>
+                {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
+              </ul>
+              <div style={{ marginTop: '0.5rem', fontWeight: 700 }}>
+                Subtotal: ${order.items.reduce((a, i) => a + i.price * i.qty, 0).toFixed(0)}
+              </div>
+              {order.status !== 'paid' && (
+                <button className="btn btn-primary" style={{ marginTop: '1rem', width: '100%' }} onClick={() => markAsPaid(order.id)}>
+                  Marcar como pagado
+                </button>
+              )}
             </div>
-            <ul style={{ marginLeft: '1rem', marginTop: '0.5rem', color: 'var(--muted)' }}>
-              {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name} (${it.price})</li>)}
-            </ul>
-            <div style={{ marginTop: '0.5rem', fontWeight: 700 }}>
-              Subtotal: ${order.items.reduce((a, i) => a + i.price * i.qty, 0).toFixed(0)}
+          ))}
+        </div>
+      )}
+
+      {/* Sección: Historial de pagos */}
+      <h2 style={{ marginBottom: '1rem' }}>Historial de pagos</h2>
+      {paymentHistory.length === 0 ? (
+        <p style={{ color: 'var(--muted)' }}>No hay pagos registrados hoy.</p>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
+          {paymentHistory.map(order => (
+            <div key={order.id} className="card" style={{ borderColor: '#7aad7a' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <strong>Mesa {order.table_number}</strong>
+                <span style={{ color: '#7aad7a' }}>Pagado</span>
+              </div>
+              <ul style={{ marginLeft: '1rem', marginTop: '0.5rem', color: 'var(--muted)' }}>
+                {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
+              </ul>
+              <div style={{ marginTop: '0.5rem', fontWeight: 700 }}>
+                Total: ${order.items.reduce((a, i) => a + i.price * i.qty, 0).toFixed(0)}
+              </div>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                {new Date(order.created_at).toLocaleString()}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
