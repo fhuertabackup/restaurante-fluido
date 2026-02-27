@@ -29,7 +29,7 @@ export default function HomePage() {
     }
   }, [])
 
-  // Guardar carrito en localStorage
+  // Guardar carrito en localStorage cada vez que cambie
   useEffect(() => {
     localStorage.setItem('cart', JSON.stringify(cart))
   }, [cart])
@@ -72,25 +72,58 @@ export default function HomePage() {
       return
     }
 
-    const items = cart.map(c => ({
+    const newItems = cart.map(c => ({
       name: c.item.name,
       qty: c.qty,
       price: c.item.price
     }))
 
-    const { error } = await supabase.from('orders').insert({
-      table_number: tableNum,
-      items,
-      status: 'pending'
-    })
+    try {
+      // Buscar pedido existente para esta mesa (que no esté delivered)
+      const { data: existingOrders } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('table_number', tableNum)
+        .in('status', ['pending', 'preparing', 'ready'])
+        .order('created_at', { ascending: false })
+        .limit(1)
 
-    if (error) {
-      alert('Error: ' + error.message)
-    } else {
+      if (existingOrders && existingOrders.length > 0) {
+        // Combinar items
+        const existing = existingOrders[0]
+        const merged = [...existing.items]
+        newItems.forEach(newItem => {
+          const found = merged.find((i: any) => i.name === newItem.name)
+          if (found) {
+            found.qty += newItem.qty
+          } else {
+            merged.push(newItem)
+          }
+        })
+
+        // Actualizar pedido existente
+        const { error: updateError } = await supabase
+          .from('orders')
+          .update({ items: merged })
+          .eq('id', existing.id)
+        if (updateError) throw updateError
+      } else {
+        // Crear nuevo pedido
+        const { error: insertError } = await supabase.from('orders').insert({
+          table_number: tableNum,
+          items: newItems,
+          status: 'pending'
+        })
+        if (insertError) throw insertError
+      }
+
+      // Limpiar carrito
       localStorage.removeItem('cart')
       setCart([])
       setTableNumber('')
-      alert('Pedido enviado. Cocina lo preparará.')
+      alert('Pedido enviado a cocina.')
+    } catch (err: any) {
+      alert('Error: ' + (err.message || 'No se pudo enviar'))
     }
   }
 
@@ -182,7 +215,7 @@ export default function HomePage() {
                     value={tableNumber}
                     onChange={e => setTableNumber(e.target.value)}
                     className="card"
-                    style={{ width: '100%', padding: '0.5rem' }}
+                    style={{ width: '100%', padding: '0.5rem', color: 'var(--text)' }}
                   />
                 </div>
 

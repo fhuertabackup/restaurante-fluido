@@ -24,6 +24,18 @@ body { background: var(--bg); color: var(--text); font-family: Inter, sans-serif
 .btn-primary { background: var(--accent); color: #0f0f0f; }
 .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
 
+input, textarea, select {
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+input:focus, textarea:focus, select:focus {
+  outline: 2px solid var(--accent);
+  border-color: var(--accent);
+}
+
 /* Layout grid para menú */
 .menu-grid {
   display: grid;
