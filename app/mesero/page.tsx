@@ -52,10 +52,18 @@ export default function MeseroPage() {
 
   const createOrder = async () => {
     const tableNum = Number(table)
-    if (!tableNum) return
-    const cart = JSON.parse(localStorage.getItem('cart') || '[]')
-    if (cart.length === 0) return alert('Carrito vacío')
-    await supabase.from('orders').insert({ table_number: tableNum, items: cart, status: 'pending' })
+    if (!tableNum) {
+      alert('Ingresa número de mesa')
+      return
+    }
+    const rawCart = JSON.parse(localStorage.getItem('cart') || '[]')
+    if (rawCart.length === 0) return alert('Carrito vacío')
+    const items = rawCart.map((c: any) => ({
+      name: c.item.name,
+      qty: c.qty,
+      price: c.item.price
+    }))
+    await supabase.from('orders').insert({ table_number: tableNum, items, status: 'pending' })
     localStorage.removeItem('cart')
     setTable('')
     alert('Pedido enviado')
