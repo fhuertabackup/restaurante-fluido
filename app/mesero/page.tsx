@@ -158,50 +158,91 @@ export default function MeseroPage() {
   const sendOrder = async () => {
     if (!orderingTable || cart.length === 0) return
     setSendingOrder(true)
-    const newItems: OrderItem[] = cart.map(c => ({ name: c.item.name, qty: c.qty, price: c.item.price }))
+    try {
+      const newItems: OrderItem[] = cart.map(c => ({ name: c.item.name, qty: c.qty, price: c.item.price }))
 
-    // Buscar ticket activo para esa mesa (excluyendo paid)
-    const activeOrder = orders.find(o => o.table_number === orderingTable)
-
-    if (activeOrder) {
-      // Fusionar al ticket existente — también reactivar si estaba en payment_requested
-      const merged = [...activeOrder.items]
-      newItems.forEach(ni => {
-        const found = merged.find((i: OrderItem) => i.name === ni.name)
-        if (found) found.qty += ni.qty
-        else merged.push(ni)
-      })
-      const newStatus = activeOrder.status === 'payment_requested' ? 'pending' : activeOrder.status
-      await supabase.from('orders').update({ items: merged, status: newStatus }).eq('id', activeOrder.id)
-    } else {
-      // Crear nuevo ticket
+      // SIEMPRE INSERT para generar una nueva tanda en cocina
       await supabase.from('orders').insert({
         table_number: orderingTable,
         items: newItems,
         status: 'pending',
       })
+
+      // Si la mesa tenía cuenta pedida, reactivarla (asumimos que al pedir más, siguen consumiendo)
+      const tableOrders = orders.filter(o => o.table_number === orderingTable)
+      const paymentRequested = tableOrders.filter(o => o.status === 'payment_requested')
+      if (paymentRequested.length > 0) {
+        await supabase.from('orders')
+          .update({ status: 'delivered' })
+          .in('id', paymentRequested.map(o => o.id))
+      }
+
+      setCart([])
+      setOrderingTable(null)
+      setActiveTab('pedidos')
+      fetchOrders()
+    } finally {
+      setSendingOrder(false)
     }
-    setCart([])
-    setSendingOrder(false)
-    setOrderingTable(null)
-    setActiveTab('pedidos')
-    fetchOrders()
   }
 
   if (!authorized) return null
 
+  // Agrupar pedidos activos por mesa
   const activeOrders = orders.filter(o => ['pending', 'preparing', 'ready', 'delivered', 'payment_requested'].includes(o.status))
-  const filteredOrders = selectedTable ? activeOrders.filter(o => o.table_number === selectedTable) : activeOrders
+  
+  // Lógica de agrupación por mesa para la visualización del mesero
+  const groupedByTable = activeOrders.reduce((acc, order) => {
+    const t = order.table_number
+    if (!acc[t]) acc[t] = { table: t, orders: [], total: 0, items: [], status: 'pending' as Order['status'] }
+    
+    acc[t].orders.push(order)
+    order.items.forEach(it => {
+      const ex = acc[t].items.find(x => x.name === it.name)
+      if (ex) ex.qty += it.qty
+      else acc[t].items.push({ ...it })
+      acc[t].total += it.price * it.qty
+    })
+
+    // El estado de la mesa para el mesero: Prioridad al más "atendido" o "crítico"
+    // Si hay algo READY, mostrarlo como prioridad para entregar.
+    // Si nada está READY pero hay PREPARING, mostrar eso.
+    const priority = ['ready', 'payment_requested', 'preparing', 'pending', 'delivered']
+    const currentIdx = priority.indexOf(acc[t].status)
+    const orderIdx = priority.indexOf(order.status)
+    if (orderIdx < currentIdx || acc[t].status === 'pending') {
+       acc[t].status = order.status
+    }
+
+    return acc
+  }, {} as Record<number, { table: number, orders: Order[], total: number, items: OrderItem[], status: Order['status'] }>)
+
+  const displayTables = selectedTable 
+    ? (groupedByTable[selectedTable] ? [groupedByTable[selectedTable]] : [])
+    : Object.values(groupedByTable).sort((a,b) => a.table - b.table)
+
   const cartTotal = cart.reduce((s, c) => s + c.item.price * c.qty, 0)
   const groupedMenu = menu.reduce((acc, item) => { (acc[item.category] ||= []).push(item); return acc }, {} as Record<string, MenuItem[]>)
 
   const statusLabel: Record<string, string> = {
-    pending: '🆕 Nuevo', preparing: '🔥 Preparando', ready: '✅ Listo',
+    pending: '🆕 Nuevo/Pedido', preparing: '🔥 Preparando', ready: '✅ ¡LISTO!',
     delivered: '📦 Entregado', payment_requested: '💳 Pide cuenta',
   }
   const statusColor: Record<string, string> = {
     pending: 'var(--muted)', preparing: '#5fa8d3', ready: 'var(--accent)',
     delivered: '#7aad7a', payment_requested: '#d35f5f',
+  }
+
+  const markTableDelivered = async (tableNum: number) => {
+    // Entregar todas las tandas que estén en modo 'ready' para esa mesa
+    const tandasReady = groupedByTable[tableNum].orders.filter(o => o.status === 'ready')
+    if (tandasReady.length === 0) return
+    
+    await supabase.from('orders')
+      .update({ status: 'delivered' })
+      .in('id', tandasReady.map(o => o.id))
+    
+    fetchOrders()
   }
 
   const tabBtn = (t: string, label: string) => ({
@@ -271,26 +312,26 @@ export default function MeseroPage() {
             </div>
           </div>
 
-          {filteredOrders.length === 0
+          {displayTables.length === 0
             ? <div className="card" style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>
                 <p>✅ {selectedTable ? `No hay pedidos para mesa ${selectedTable}` : 'No hay pedidos activos'}</p>
               </div>
             : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-                {filteredOrders.map(order => (
-                  <div key={order.id} className="card" style={{ borderColor: order.status === 'payment_requested' ? '#d35f5f' : order.status === 'ready' ? 'var(--accent)' : undefined }}>
+                {displayTables.map(group => (
+                  <div key={group.table} className="card" style={{ borderColor: group.status === 'payment_requested' ? '#d35f5f' : group.status === 'ready' ? 'var(--accent)' : undefined }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                      <strong>Mesa {order.table_number}</strong>
-                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: statusColor[order.status] }}>{statusLabel[order.status]}</span>
+                      <strong>Mesa {group.table}</strong>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: statusColor[group.status] }}>{statusLabel[group.status]}</span>
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>
-                      {new Date(order.created_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
+                      {group.orders.length} tanda(s) activa(s)
                     </div>
                     <ul style={{ marginLeft: '1rem', marginBottom: '0.75rem', color: 'var(--muted)', fontSize: '0.875rem' }}>
-                      {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
+                      {group.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
                     </ul>
-                    <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>${order.items.reduce((a, i) => a + i.price * i.qty, 0).toFixed(0)}</div>
-                    {order.status === 'ready' && (
-                      <button className="btn btn-primary" style={{ width: '100%', padding: '0.4rem' }} onClick={() => markDelivered(order.id)}>📦 Entregar</button>
+                    <div style={{ fontWeight: 700, marginBottom: '0.5rem' }}>${group.total.toFixed(0)}</div>
+                    {group.status === 'ready' && (
+                      <button className="btn btn-primary" style={{ width: '100%', padding: '0.4rem' }} onClick={() => markTableDelivered(group.table)}>📦 Entregar Todo lo Listo</button>
                     )}
                   </div>
                 ))}

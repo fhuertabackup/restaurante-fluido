@@ -32,7 +32,7 @@ export default function MesaPage() {
 
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<{ item: MenuItem; qty: number }[]>([])
-  const [activeOrder, setActiveOrder] = useState<Order | null>(null)
+  const [activeOrders, setActiveOrders] = useState<Order[]>([])
   const [callSent, setCallSent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [view, setView] = useState<'menu' | 'status'>('menu')
@@ -52,32 +52,31 @@ export default function MesaPage() {
     localStorage.setItem(`cart_mesa_${numero}`, JSON.stringify(cart))
   }, [cart, numero])
 
-  // Pedido activo de la mesa
-  const fetchActiveOrder = useCallback(async () => {
+  // Pedidos activos de la mesa (Agrupados)
+  const fetchActiveOrders = useCallback(async () => {
     const { data } = await supabase
       .from('orders')
       .select('*')
       .eq('table_number', Number(numero))
       .not('status', 'eq', 'paid')
-      .order('created_at', { ascending: false })
-      .limit(1)
-    setActiveOrder(data?.[0] || null)
+      .order('created_at', { ascending: true })
+    setActiveOrders(data || [])
   }, [numero])
 
   useEffect(() => {
-    fetchActiveOrder()
+    fetchActiveOrders()
     const channel = supabase.channel(`mesa-rt-${numero}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `table_number=eq.${numero}` }, fetchActiveOrder)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `table_number=eq.${numero}` }, fetchActiveOrders)
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [numero, fetchActiveOrder])
+  }, [numero, fetchActiveOrders])
 
   // Cambiar automáticamente a pestaña status cuando hay pedido activo
   useEffect(() => {
-    if (activeOrder && ['pending', 'preparing', 'ready', 'delivered', 'payment_requested'].includes(activeOrder.status)) {
-      setView('status')
+    if (activeOrders.length > 0 && activeOrders.some(o => o.status !== 'paid')) {
+      // Solo si el usuario no cerró explícitamente o es el primer pedido
     }
-  }, [activeOrder?.id])
+  }, [activeOrders.length])
 
   const addToCart = (item: MenuItem) => {
     setCart(c => {
@@ -104,34 +103,37 @@ export default function MesaPage() {
     try {
       const newItems: OrderItem[] = cart.map(c => ({ name: c.item.name, qty: c.qty, price: c.item.price }))
 
-      if (activeOrder && activeOrder.status !== 'paid') {
-        // Ticket activo: fusionar items
-        const merged: OrderItem[] = [...activeOrder.items]
-        newItems.forEach(ni => {
-          const found = merged.find(i => i.name === ni.name)
-          if (found) found.qty += ni.qty
-          else merged.push(ni)
-        })
-        // Si estaba pidiendo cuenta, volver a estado activo
-        const newStatus = activeOrder.status === 'payment_requested' ? 'pending' : activeOrder.status
-        await supabase.from('orders').update({ items: merged, status: newStatus }).eq('id', activeOrder.id)
-      } else {
-        // Sin ticket activo: crear nuevo
-        await supabase.from('orders').insert({ table_number: Number(numero), items: newItems, status: 'pending' })
+      // SIEMPRE INSERT para generar una nueva tanda en cocina
+      await supabase.from('orders').insert({
+        table_number: Number(numero),
+        items: newItems,
+        status: 'pending'
+      })
+
+      // Si había pedido cuenta, "cancelar" esa intención reactivando el flujo de pedidos
+      const paymentRequestedOrders = activeOrders.filter(o => o.status === 'payment_requested')
+      if (paymentRequestedOrders.length > 0) {
+        await supabase.from('orders')
+          .update({ status: 'delivered' })
+          .in('id', paymentRequestedOrders.map(o => o.id))
       }
+
       localStorage.removeItem(`cart_mesa_${numero}`)
       setCart([])
       setView('status')
-      await fetchActiveOrder()
+      await fetchActiveOrders()
     } finally {
       setSubmitting(false)
     }
   }
 
   const requestPayment = async () => {
-    if (!activeOrder) return
-    await supabase.from('orders').update({ status: 'payment_requested' }).eq('id', activeOrder.id)
-    fetchActiveOrder()
+    if (activeOrders.length === 0) return
+    await supabase.from('orders')
+      .update({ status: 'payment_requested' })
+      .eq('table_number', Number(numero))
+      .not('status', 'eq', 'paid')
+    fetchActiveOrders()
   }
 
   const callWaiter = async () => {
@@ -141,9 +143,32 @@ export default function MesaPage() {
   }
 
   const grouped = menu.reduce((acc, item) => { (acc[item.category] ||= []).push(item); return acc }, {} as Record<string, MenuItem[]>)
-  const orderStatus = activeOrder ? STATUS_LABELS[activeOrder.status] : null
-  const orderTotal = activeOrder ? activeOrder.items.reduce((a, i) => a + i.price * i.qty, 0) : 0
-  const canAddMore = !activeOrder || ['pending', 'preparing', 'ready', 'delivered', 'payment_requested'].includes(activeOrder.status)
+  
+  // Consolidar todos los ítems de todas las tandas activas para el cliente
+  const allOrderedItems = activeOrders.reduce((acc, order) => {
+    order.items.forEach(it => {
+      const found = acc.find(x => x.name === it.name)
+      if (found) found.qty += it.qty
+      else acc.push({ ...it })
+    })
+    return acc
+  }, [] as OrderItem[])
+
+  const orderTotal = allOrderedItems.reduce((a, i) => a + i.price * i.qty, 0)
+  
+  // Estado consolidado: mostrar el más "crítico" o el último. 
+  // Prioridad: preparing > pending > ready > delivered > payment_requested
+  const getConsolidatedStatus = () => {
+    if (activeOrders.length === 0) return null
+    if (activeOrders.some(o => o.status === 'preparing')) return STATUS_LABELS['preparing']
+    if (activeOrders.some(o => o.status === 'pending')) return STATUS_LABELS['pending']
+    if (activeOrders.some(o => o.status === 'ready')) return STATUS_LABELS['ready']
+    if (activeOrders.some(o => o.status === 'payment_requested')) return STATUS_LABELS['payment_requested']
+    return STATUS_LABELS['delivered']
+  }
+  
+  const consolidatedStatus = getConsolidatedStatus()
+  const canAddMore = activeOrders.length === 0 || activeOrders.some(o => o.status !== 'paid')
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)', fontFamily: 'system-ui, sans-serif' }}>
@@ -179,14 +204,14 @@ export default function MesaPage() {
           onClick={() => setView('status')}
           style={{ flex: 1, padding: '0.65rem', fontWeight: 600, fontSize: '0.875rem', background: view === 'status' ? 'rgba(200,169,110,0.1)' : 'transparent', borderBottom: view === 'status' ? '2px solid var(--accent)' : 'none', color: view === 'status' ? 'var(--accent)' : 'var(--muted)', border: 'none', cursor: 'pointer' }}
         >
-          📦 Mi pedido {activeOrder && activeOrder.status !== 'paid' ? `· ${orderStatus?.icon}` : ''}
+          📦 Mi pedido {activeOrders.length > 0 ? `· ${consolidatedStatus?.icon}` : ''}
         </button>
       </div>
 
       {/* Vista: Menú */}
       {view === 'menu' && (
         <div style={{ padding: '1rem 1.25rem', paddingBottom: cart.length > 0 ? '120px' : '1.5rem' }}>
-          {!canAddMore && activeOrder?.status === 'paid' && (
+          {!canAddMore && (
             <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--muted)', fontSize: '0.9rem' }}>
               Gracias. Si desea pedir algo más, un nuevo ticket se abrirá.
             </div>
@@ -225,7 +250,7 @@ export default function MesaPage() {
       {/* Vista: Estado del pedido */}
       {view === 'status' && (
         <div style={{ padding: '1.25rem' }}>
-          {!activeOrder || activeOrder.status === 'paid' ? (
+          {activeOrders.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>
               <p style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🍽️</p>
               <p>No hay pedido activo.</p>
@@ -233,18 +258,18 @@ export default function MesaPage() {
             </div>
           ) : (
             <div>
-              {/* Estado */}
-              <div style={{ padding: '1.25rem', borderRadius: '12px', border: `1px solid ${orderStatus?.color}`, background: `${orderStatus?.color}15`, marginBottom: '1.25rem' }}>
+              {/* Estado Consolidado */}
+              <div style={{ padding: '1.25rem', borderRadius: '12px', border: `1px solid ${consolidatedStatus?.color}`, background: `${consolidatedStatus?.color}15`, marginBottom: '1.25rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                  <span style={{ fontSize: '1.75rem' }}>{orderStatus?.icon}</span>
-                  <strong style={{ color: orderStatus?.color, fontSize: '1rem' }}>{orderStatus?.label}</strong>
+                  <span style={{ fontSize: '1.75rem' }}>{consolidatedStatus?.icon}</span>
+                  <strong style={{ color: consolidatedStatus?.color, fontSize: '1rem' }}>{consolidatedStatus?.label}</strong>
                 </div>
               </div>
 
-              {/* Items del pedido */}
+              {/* Items del pedido consolidado */}
               <div className="card" style={{ marginBottom: '1rem' }}>
-                <h3 style={{ marginBottom: '0.75rem', fontSize: '0.9rem' }}>Tu pedido</h3>
-                {activeOrder.items.map((it, i) => (
+                <h3 style={{ marginBottom: '0.75rem', fontSize: '0.9rem' }}>Tu cuenta total</h3>
+                {allOrderedItems.map((it, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', marginBottom: '0.35rem', color: 'var(--muted)' }}>
                     <span>{it.qty} × {it.name}</span>
                     <span>${(it.price * it.qty).toFixed(0)}</span>
@@ -257,16 +282,16 @@ export default function MesaPage() {
 
               {/* Acciones */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                {activeOrder.status === 'delivered' && (
+                {activeOrders.some(o => o.status === 'delivered') && !activeOrders.some(o => o.status === 'payment_requested') && (
                   <button className="btn btn-primary" style={{ width: '100%' }} onClick={requestPayment}>💳 Pedir la cuenta</button>
                 )}
-                {activeOrder.status === 'payment_requested' && (
+                {activeOrders.some(o => o.status === 'payment_requested') && (
                   <div style={{ textAlign: 'center', color: '#9a7acd', padding: '0.5rem', fontSize: '0.875rem' }}>
                     Cuenta solicitada. Se le atenderá en breve.
                   </div>
                 )}
                 <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setView('menu')}>
-                  {activeOrder.status === 'payment_requested' ? '¿Quiere agregar algo más?' : '+ Agregar más al pedido'}
+                  {activeOrders.some(o => o.status === 'payment_requested') ? '¿Quiere agregar algo más?' : '+ Agregar más al pedido'}
                 </button>
               </div>
             </div>
@@ -278,7 +303,7 @@ export default function MesaPage() {
       {cart.length > 0 && view === 'menu' && (
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'var(--card)', borderTop: '1px solid var(--border)', padding: '1rem 1.25rem', boxShadow: '0 -4px 20px rgba(0,0,0,0.3)', zIndex: 50 }}>
           <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-            {activeOrder && activeOrder.status === 'payment_requested' && (
+            {activeOrders.some(o => o.status === 'payment_requested') && (
               <p style={{ fontSize: '0.78rem', color: '#9a7acd', textAlign: 'center', marginBottom: '0.4rem' }}>
                 Al enviar, se agregarán al ticket actual y se cancelará la solicitud de cuenta
               </p>
@@ -288,7 +313,7 @@ export default function MesaPage() {
               <span style={{ fontWeight: 700, color: 'var(--accent)', fontSize: '1.2rem' }}>${total.toFixed(0)}</span>
             </div>
             <button className="btn btn-primary" style={{ width: '100%', padding: '0.75rem', fontSize: '1rem' }} onClick={submitOrder} disabled={submitting}>
-              {submitting ? 'Enviando…' : activeOrder ? '➕ Agregar al pedido' : '🚀 Enviar pedido a cocina'}
+              {submitting ? 'Enviando…' : activeOrders.length > 0 ? '➕ Agregar al pedido' : '🚀 Enviar pedido a cocina'}
             </button>
           </div>
         </div>

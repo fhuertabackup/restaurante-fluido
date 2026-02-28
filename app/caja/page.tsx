@@ -17,6 +17,14 @@ type Order = {
   payment_method?: string
 }
 
+type GroupedAccount = {
+  table_number: number
+  orders: Order[]
+  total: number
+  items: OrderItem[]
+  status: string
+}
+
 export default function CajaPage() {
   const supabase = createClient()
   const router = useRouter()
@@ -24,11 +32,13 @@ export default function CajaPage() {
   const [authorized, setAuthorized] = useState(false)
   const [userEmail, setUserEmail] = useState('')
   const [activeTab, setActiveTab] = useState<'cuentas' | 'historial' | 'estadisticas'>('cuentas')
-  const [paymentModal, setPaymentModal] = useState<Order | null>(null)
+  
+  // Para el modal de pago ahora pasamos el grupo de la mesa
+  const [paymentModal, setPaymentModal] = useState<GroupedAccount | null>(null)
   const [payMethod, setPayMethod] = useState<'efectivo' | 'tarjeta' | 'transferencia'>('efectivo')
   const [paying, setPaying] = useState(false)
 
-  // ── Estadísticas (todos los hooks SIEMPRE antes de any conditional return) ────
+  // ── Estadísticas ─────────────────────────────────────────────────────────────
   const paidOrders = useMemo(() => orders.filter(o => o.status === 'paid'), [orders])
 
   const topProducts = useMemo(() => {
@@ -84,16 +94,47 @@ export default function CajaPage() {
   const confirmPayment = async () => {
     if (!paymentModal) return
     setPaying(true)
-    await supabase.from('orders').update({ status: 'paid', payment_method: payMethod }).eq('id', paymentModal.id)
+    
+    // Liquidar todas las tandas de la mesa en una sola tanda de actualizaciones
+    const ids = paymentModal.orders.map(o => o.id)
+    await supabase.from('orders')
+      .update({ status: 'paid', payment_method: payMethod })
+      .in('id', ids)
+    
     setPaymentModal(null)
     setPaying(false)
     fetchOrders()
   }
 
-  // ── Early return DESPUÉS de todos los hooks ──────────────────────────────────
   if (!authorized) return null
 
-  const pendingPayments = orders.filter(o => ['payment_requested', 'delivered'].includes(o.status))
+  // ── Agrupación de Cuentas por Mesa ──────────────────────────────────────────
+  const pendingPayments = orders.filter(o => ['pending', 'preparing', 'ready', 'delivered', 'payment_requested'].includes(o.status))
+  
+  const groupedAccounts: Record<number, GroupedAccount> = pendingPayments.reduce((acc, order) => {
+    const t = order.table_number
+    if (!acc[t]) acc[t] = { table_number: t, orders: [], total: 0, items: [], status: 'pending' }
+    
+    acc[t].orders.push(order)
+    order.items.forEach(it => {
+      const ex = acc[t].items.find(x => x.name === it.name)
+      if (ex) ex.qty += it.qty
+      else acc[t].items.push({ ...it })
+      acc[t].total += it.price * it.qty
+    })
+
+    // Estado visual de la cuenta: prioridad a 'payment_requested'
+    if (order.status === 'payment_requested' || acc[t].status === 'pending') {
+      acc[t].status = order.status
+    } else if (order.status === 'ready' && acc[t].status !== 'payment_requested') {
+      acc[t].status = 'ready'
+    }
+    
+    return acc
+  }, {} as Record<number, GroupedAccount>)
+
+  const displayAccounts = Object.values(groupedAccounts).sort((a,b) => a.table_number - b.table_number)
+
   const paymentHistory = orders.filter(o => o.status === 'paid')
   const totalVentas = paymentHistory.reduce((acc, o) => acc + o.items.reduce((a, i) => a + i.price * i.qty, 0), 0)
   const maxQty = topProducts[0]?.[1] || 1
@@ -101,33 +142,22 @@ export default function CajaPage() {
   const maxByHour = Math.max(...Object.values(byHour), 1)
 
   const tabStyle = (tab: string): React.CSSProperties => ({
-    padding: '0.5rem 1.1rem',
-    fontWeight: 600,
-    fontSize: '0.875rem',
-    cursor: 'pointer',
+    padding: '0.5rem 1.1rem', fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer',
     background: activeTab === tab ? 'var(--accent)' : 'transparent',
-    color: activeTab === tab ? '#0f0f0f' : 'var(--fg, var(--text))',
-    border: '1px solid',
-    borderColor: activeTab === tab ? 'var(--accent)' : 'var(--border)',
-    borderRadius: '8px',
-    transition: 'all 0.15s',
+    color: activeTab === tab ? '#0f0f0f' : 'var(--text)',
+    border: '1px solid', borderColor: activeTab === tab ? 'var(--accent)' : 'var(--border)',
+    borderRadius: '8px', transition: 'all 0.15s',
   })
 
   const methodBtn = (m: string): React.CSSProperties => ({
-    flex: 1,
-    padding: '0.75rem',
-    borderRadius: '10px',
-    border: '2px solid',
+    flex: 1, padding: '0.75rem', borderRadius: '10px', border: '2px solid',
     borderColor: payMethod === m ? 'var(--accent)' : 'var(--border)',
     background: payMethod === m ? 'rgba(200,169,110,0.12)' : 'transparent',
-    color: 'var(--text)',
-    cursor: 'pointer',
-    fontWeight: 600,
-    transition: 'all 0.15s',
+    color: 'var(--text)', cursor: 'pointer', fontWeight: 600, transition: 'all 0.15s',
   })
 
   return (
-    <div className="container" style={{ paddingTop: '2rem' }}>
+    <div className="container" style={{ paddingTop: '2rem', paddingBottom: '3rem' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <h1 style={{ marginBottom: 0 }}>💰 Caja</h1>
@@ -144,157 +174,162 @@ export default function CajaPage() {
           <p style={{ fontSize: '1.8rem', fontWeight: 700, color: 'var(--accent)' }}>${totalVentas.toFixed(0)}</p>
         </div>
         <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: '0.25rem' }}>Cuentas pendientes</p>
-          <p style={{ fontSize: '1.8rem', fontWeight: 700, color: pendingPayments.length > 0 ? '#d35f5f' : 'var(--text)' }}>{pendingPayments.length}</p>
+          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: '0.25rem' }}>Mesas activas</p>
+          <p style={{ fontSize: '1.8rem', fontWeight: 700, color: displayAccounts.length > 0 ? '#d35f5f' : 'var(--text)' }}>{displayAccounts.length}</p>
         </div>
         <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: '0.25rem' }}>Pedidos pagados</p>
+          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: '0.25rem' }}>Órdenes pagadas</p>
           <p style={{ fontSize: '1.8rem', fontWeight: 700 }}>{paymentHistory.length}</p>
         </div>
-        {topTable && (
-          <div className="card" style={{ textAlign: 'center' }}>
-            <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginBottom: '0.25rem' }}>Mesa top</p>
-            <p style={{ fontSize: '1.8rem', fontWeight: 700, color: 'var(--accent)' }}>
-              Mesa {topTable[0]} <span style={{ fontSize: '0.9rem' }}>(${Number(topTable[1]).toFixed(0)})</span>
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-        <button style={tabStyle('cuentas')} onClick={() => setActiveTab('cuentas')}>💳 Cuentas ({pendingPayments.length})</button>
-        <button style={tabStyle('historial')} onClick={() => setActiveTab('historial')}>📋 Historial</button>
-        <button style={tabStyle('estadisticas')} onClick={() => setActiveTab('estadisticas')}>📊 Estadísticas</button>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+        <button style={tabStyle('cuentas')} onClick={() => setActiveTab('cuentas')}>📊 Cuentas</button>
+        <button style={tabStyle('historial')} onClick={() => setActiveTab('historial')}>📜 Historial</button>
+        <button style={tabStyle('estadisticas')} onClick={() => setActiveTab('estadisticas')}>📈 Estadísticas</button>
       </div>
 
-      {/* Tab: Cuentas */}
+      {/* TAB: CUENTAS (Agrupadas por Mesa) */}
       {activeTab === 'cuentas' && (
-        pendingPayments.length === 0
-          ? <div className="card" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--muted)' }}><p>✅ No hay cuentas pendientes</p></div>
-          : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
-              {pendingPayments.map(order => {
-                const total = order.items.reduce((a, i) => a + i.price * i.qty, 0)
-                return (
-                  <div key={order.id} className="card" style={{ borderColor: order.status === 'payment_requested' ? '#d35f5f' : undefined }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                      <strong>Mesa {order.table_number}</strong>
-                      <span style={{ color: order.status === 'payment_requested' ? '#d35f5f' : 'var(--muted)', fontWeight: 600, fontSize: '0.85rem' }}>
-                        {order.status === 'payment_requested' ? '💳 Pide cuenta' : 'Para pagar'}
-                      </span>
-                    </div>
-                    <ul style={{ marginLeft: '1rem', marginBottom: '0.75rem', color: 'var(--muted)', fontSize: '0.875rem' }}>
-                      {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
-                    </ul>
-                    <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: '0.75rem' }}>Total: ${total.toFixed(0)}</div>
-                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => { setPaymentModal(order); setPayMethod('efectivo') }}>
-                      💳 Cobrar
-                    </button>
-                  </div>
-                )
-              })}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
+          {displayAccounts.length === 0 ? (
+            <div className="card" style={{ gridColumn: '1/-1', textAlign: 'center', padding: '3rem', color: 'var(--muted)' }}>
+              ☕ No hay mesas consumiendo ahora mismo.
             </div>
-      )}
-
-      {/* Tab: Historial */}
-      {activeTab === 'historial' && (
-        paymentHistory.length === 0
-          ? <div className="card" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--muted)' }}><p>Sin pagos aún</p></div>
-          : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: '1rem' }}>
-              {paymentHistory.map(order => {
-                const total = order.items.reduce((a, i) => a + i.price * i.qty, 0)
-                const methodIcon: Record<string, string> = { efectivo: '💵', tarjeta: '💳', transferencia: '📲' }
-                return (
-                  <div key={order.id} className="card" style={{ borderColor: '#7aad7a' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                      <strong>Mesa {order.table_number}</strong>
-                      <span style={{ color: '#7aad7a', fontWeight: 600, fontSize: '0.85rem' }}>
-                        {order.payment_method ? methodIcon[order.payment_method] || '✓' : '✓'} Pagado
-                      </span>
-                    </div>
-                    <ul style={{ marginLeft: '1rem', marginTop: '0.5rem', color: 'var(--muted)', fontSize: '0.85rem' }}>
-                      {order.items.map((it, i) => <li key={i}>{it.qty} × {it.name}</li>)}
-                    </ul>
-                    <div style={{ marginTop: '0.5rem', fontWeight: 700 }}>${total.toFixed(0)}</div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.25rem' }}>
-                      {new Date(order.created_at).toLocaleString('es-CL', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}
-                      {order.payment_method && <span style={{ marginLeft: '0.5rem', textTransform: 'capitalize' }}>· {order.payment_method}</span>}
-                    </div>
+          ) : (
+            displayAccounts.map(account => (
+              <div key={account.table_number} className="card" style={{ borderColor: account.status === 'payment_requested' ? '#d35f5f' : 'var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                  <h3 style={{ margin: 0 }}>Mesa {account.table_number}</h3>
+                  {account.status === 'payment_requested' && (
+                    <span style={{ background: '#d35f5f', color: 'white', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 700 }}>PIDE CUENTA</span>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.82rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
+                  {account.orders.length} tanda(s) registradas
+                </div>
+                <ul style={{ margin: '0 0 1rem 1rem', padding: 0, fontSize: '0.875rem', color: 'var(--muted)' }}>
+                  {account.items.map((it, i) => (
+                    <li key={i} style={{ marginBottom: '0.25rem' }}>{it.qty} × {it.name}</li>
+                  ))}
+                </ul>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: '1rem', marginTop: 'auto' }}>
+                  <div>
+                    <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--muted)' }}>Total a cobrar</p>
+                    <p style={{ margin: 0, fontSize: '1.4rem', fontWeight: 700 }}>${account.total.toFixed(0)}</p>
                   </div>
-                )
-              })}
-            </div>
-      )}
-
-      {/* Tab: Estadísticas */}
-      {activeTab === 'estadisticas' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          {paidOrders.length === 0
-            ? <div className="card" style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--muted)' }}><p>Sin datos de ventas aún</p></div>
-            : <>
-                <div className="card">
-                  <h3 style={{ marginBottom: '1rem' }}>🥇 Top 5 productos</h3>
-                  {topProducts.map(([name, qty], i) => (
-                    <div key={name} style={{ marginBottom: '0.75rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', fontSize: '0.875rem' }}>
-                        <span><strong style={{ color: 'var(--accent)' }}>#{i + 1}</strong> {name}</span>
-                        <span style={{ fontWeight: 700 }}>{qty} uds</span>
-                      </div>
-                      <div style={{ background: 'var(--border)', borderRadius: '4px', height: '8px' }}>
-                        <div style={{ height: '100%', width: `${(qty / maxQty) * 100}%`, background: 'var(--accent)', borderRadius: '4px' }} />
-                      </div>
-                    </div>
-                  ))}
+                  <button className="btn btn-primary" onClick={() => setPaymentModal(account)}>💰 Cobrar</button>
                 </div>
-                <div className="card">
-                  <h3 style={{ marginBottom: '1rem' }}>⏰ Actividad por hora</h3>
-                  {horasPico.map(([hora, count]) => (
-                    <div key={hora} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                      <span style={{ width: '48px', fontSize: '0.8rem', color: 'var(--muted)', flexShrink: 0 }}>{String(hora).padStart(2, '0')}:00</span>
-                      <div style={{ flex: 1, background: 'var(--border)', borderRadius: '4px', height: '10px' }}>
-                        <div style={{ height: '100%', width: `${(count / maxByHour) * 100}%`, background: '#5fa8d3', borderRadius: '4px' }} />
-                      </div>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{count}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-          }
+              </div>
+            ))
+          )}
         </div>
       )}
 
-      {/* Modal de pago */}
+      {/* TAB: HISTORIAL (Tickets individuales pagados) */}
+      {activeTab === 'historial' && (
+        <div className="card">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left' }}>
+                <th style={{ padding: '0.75rem' }}>Mesa</th>
+                <th style={{ padding: '0.75rem' }}>Hora</th>
+                <th style={{ padding: '0.75rem' }}>Productos</th>
+                <th style={{ padding: '0.75rem' }}>Pago</th>
+                <th style={{ padding: '0.75rem', textAlign: 'right' }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paymentHistory.map(o => (
+                <tr key={o.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '0.75rem', fontWeight: 600 }}>{o.table_number}</td>
+                  <td style={{ padding: '0.75rem', color: 'var(--muted)' }}>{new Date(o.created_at).toLocaleTimeString()}</td>
+                  <td style={{ padding: '0.75rem', fontSize: '0.78rem' }}>{o.items.map(i => `${i.qty}x ${i.name}`).join(', ')}</td>
+                  <td style={{ padding: '0.75rem' }}><span style={{ textTransform: 'capitalize', padding: '0.1rem 0.4rem', background: 'rgba(200,169,110,0.1)', borderRadius: '4px', fontSize: '0.7rem' }}>{o.payment_method || '—'}</span></td>
+                  <td style={{ padding: '0.75rem', textAlign: 'right', fontWeight: 700 }}>${o.items.reduce((a, i) => a + i.price * i.qty, 0).toFixed(0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* TAB: ESTADISTICAS */}
+      {activeTab === 'estadisticas' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+          <div className="card">
+            <h3 style={{ marginBottom: '1.25rem' }}>TOP 5 Productos</h3>
+            {topProducts.map(([name, qty]) => (
+              <div key={name} style={{ marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '0.25rem' }}>
+                  <span>{name}</span>
+                  <strong>{qty} u.</strong>
+                </div>
+                <div style={{ width: '100%', height: '6px', background: 'var(--border)', borderRadius: '3px' }}>
+                  <div style={{ height: '100%', width: `${(qty / maxQty) * 100}%`, background: 'var(--accent)', borderRadius: '3px' }}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card">
+            <h3 style={{ marginBottom: '1.25rem' }}>Ventas por Hora</h3>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.4rem', height: '150px', paddingTop: '1rem' }}>
+              {Array.from({ length: 24 }).map((_, h) => {
+                const val = byHour[h] || 0
+                return (
+                  <div key={h} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                    <div style={{ width: '100%', background: val > 0 ? 'var(--accent)' : 'rgba(255,255,255,0.05)', height: `${(val / maxByHour) * 100}%`, borderRadius: '2px 2px 0 0', minHeight: '2px' }}></div>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--muted)' }}>{h}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {topTable && (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+              <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Mesa con más ventas</p>
+              <p style={{ fontSize: '3rem', fontWeight: 800, margin: '0.5rem 0', color: 'var(--accent)' }}>#{topTable[0]}</p>
+              <p style={{ fontSize: '1.1rem', fontWeight: 600 }}>${topTable[1].toFixed(0)} facturados</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODAL DE PAGO */}
       {paymentModal && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
-        }}>
-          <div className="card" style={{ maxWidth: '420px', width: '100%' }}>
-            <h2 style={{ marginBottom: '0.75rem' }}>Cobrar Mesa {paymentModal.table_number}</h2>
-            <ul style={{ marginLeft: '1rem', marginBottom: '0.75rem', color: 'var(--muted)', fontSize: '0.875rem' }}>
-              {paymentModal.items.map((it, i) => (
-                <li key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{it.qty} × {it.name}</span>
-                  <span>${(it.price * it.qty).toFixed(0)}</span>
-                </li>
-              ))}
-            </ul>
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '1.25rem', borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
-              Total: ${paymentModal.items.reduce((a, i) => a + i.price * i.qty, 0).toFixed(0)}
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}>
+          <div className="card" style={{ maxWidth: '450px', width: '100%', border: '1px solid var(--accent)' }}>
+            <h2 style={{ marginBottom: '1.5rem', textAlign: 'center' }}>Cobrar Mesa {paymentModal.table_number}</h2>
+            
+            <div className="card" style={{ background: 'rgba(255,255,255,0.03)', marginBottom: '1.5rem' }}>
+              <div style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '1rem' }}>
+                {paymentModal.items.map((it, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: '0.3rem', color: 'var(--muted)' }}>
+                    <span>{it.qty} × {it.name}</span>
+                    <span>${(it.price * it.qty).toFixed(0)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong style={{ fontSize: '1.1rem' }}>Total a pagar</strong>
+                <strong style={{ fontSize: '1.8rem', color: 'var(--accent)' }}>${paymentModal.total.toFixed(0)}</strong>
+              </div>
             </div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>Método de pago</p>
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-              {(['efectivo', 'tarjeta', 'transferencia'] as const).map(m => (
-                <button key={m} style={methodBtn(m)} onClick={() => setPayMethod(m)}>
-                  {m === 'efectivo' ? '💵' : m === 'tarjeta' ? '💳' : '📲'}<br />
-                  <span style={{ fontSize: '0.8rem', textTransform: 'capitalize' }}>{m}</span>
-                </button>
-              ))}
+
+            <p style={{ fontSize: '0.9rem', marginBottom: '0.75rem', fontWeight: 600 }}>Método de pago:</p>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem' }}>
+              <button style={methodBtn('efectivo')} onClick={() => setPayMethod('efectivo')}>💵 Efectivo</button>
+              <button style={methodBtn('tarjeta')} onClick={() => setPayMethod('tarjeta')}>💳 Tarjeta</button>
+              <button style={methodBtn('transferencia')} onClick={() => setPayMethod('transferencia')}>🏦 Transf.</button>
             </div>
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setPaymentModal(null)}>Cancelar</button>
-              <button className="btn btn-primary" style={{ flex: 2 }} onClick={confirmPayment} disabled={paying}>
-                {paying ? 'Procesando…' : '✅ Confirmar pago'}
+
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setPaymentModal(null)} disabled={paying}>Cancelar</button>
+              <button className="btn btn-primary" style={{ flex: 2, padding: '0.75rem' }} onClick={confirmPayment} disabled={paying}>
+                {paying ? 'Procesando...' : 'Confirmar Pago'}
               </button>
             </div>
           </div>
