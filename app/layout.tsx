@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
+import { ThemeProvider } from '@/components/ThemeToggle'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -8,37 +9,23 @@ export const metadata: Metadata = {
   title: 'Restaurante Fluido',
   description: 'Sistema integral para restaurantes',
   manifest: '/manifest.json',
-  themeColor: '#0f0f0f',
-  viewport: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no',
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'default',
-    title: 'Restaurante Fluido',
-  },
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es">
       <head>
         <link rel="manifest" href="/manifest.json" />
-        <meta name="theme-color" content="#0f0f0f" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
       </head>
       <body className={inter.className}>
-        {children}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('/sw.js').catch(console.error)
-              }
-            `,
-          }}
-        />
+        <ThemeProvider>{children}</ThemeProvider>
+        <script dangerouslySetInnerHTML={{ __html: `
+          const t = localStorage.getItem('rf_theme') || 'dark';
+          document.documentElement.setAttribute('data-theme', t);
+          const btn = document.getElementById('theme-toggle-btn');
+          if (btn) btn.textContent = t === 'dark' ? '☀️' : '🌙';
+        ` }} />
       </body>
     </html>
   )

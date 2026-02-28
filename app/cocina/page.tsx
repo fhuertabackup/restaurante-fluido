@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { ThemeToggle } from '@/components/ThemeToggle'
 
 type Order = {
   id: string
@@ -120,7 +121,7 @@ export default function CocinaPage() {
     <div className="container" style={{ paddingTop: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h1 style={{ marginBottom: 0 }}>🍳 Cocina</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           {/* Toggle sonido */}
           <button
             className="btn btn-secondary"
@@ -135,6 +136,7 @@ export default function CocinaPage() {
           >
             {soundEnabled ? '🔔 Sonido ON' : '🔕 Sonido OFF'}
           </button>
+          <ThemeToggle />
           <span style={{ fontSize: '0.875rem', color: 'var(--muted)' }}>{userEmail}</span>
           <button className="btn btn-secondary" onClick={async () => {
             await supabase.auth.signOut()
